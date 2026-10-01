@@ -1,15 +1,14 @@
 import os
 import requests
-from shapely.geometry import Point, shape
 
+# Credenciales de Telegram (desde Secrets)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-LATITUD_OBJETIVO = -34.5950
-LONGITUD_OBJETIVO = -58.6350
+# Coordenadas exactas a vigilar
+LATITUD = -34.5950
+LONGITUD = -58.6350
 
-# URLs del SMN
-URL_ACP = "https://ssl.smn.gob.ar/ws/index.php?resource=acp"
 HISTORIAL_ALERTAS = "alertas_enviadas.txt"
 
 
@@ -20,9 +19,9 @@ def cargar_alertas_notificadas():
         return set(line.strip() for line in f if line.strip())
 
 
-def guardar_alerta_notificada(alerta_id):
+def guardar_alerta_notificada(evento_id):
     with open(HISTORIAL_ALERTAS, "a", encoding="utf-8") as f:
-        f.write(f"{alerta_id}\n")
+        f.write(f"{evento_id}\n")
 
 
 def enviar_mensaje_telegram(mensaje):
@@ -36,96 +35,87 @@ def enviar_mensaje_telegram(mensaje):
     try:
         res = requests.post(url, json=payload, timeout=10)
         res.raise_for_status()
-        print("-> Alerta despachada a Telegram.")
+        print("-> Alerta despachada a Telegram exitosamente.")
     except Exception as e:
         print(f"Error al enviar a Telegram: {e}")
 
 
-def obtener_datos_smn():
-    # Cabeceras que emulan una sesión real de navegador para evitar el error 403
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Referer": "https://www.smn.gob.ar/",
-        "Origin": "https://www.smn.gob.ar",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
-    }
-    session = requests.Session()
-    session.headers.update(headers)
-    
-    # Intento 1: recurso directo ACP
-    try:
-        res = session.get(URL_ACP, timeout=15)
-        if res.status_code == 200:
-            return res.json()
-    except Exception as e:
-        print(f"Intento directo falló: {e}")
-
-    # Intento 2: endpoint alternativo de alertas tempranas
-    url_alt = "https://ssl.smn.gob.ar/ws/index.php?resource=warning"
-    res = session.get(url_alt, timeout=15)
-    res.raise_for_status()
-    return res.json()
-
-
-def verificar_granizo():
+def verificar_tiempo():
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("Error: Variables de entorno de Telegram no configuradas.")
+        print("Error: Variables de entorno de Telegram ausentes.")
         return
 
-    punto_usuario = Point(LONGITUD_OBJETIVO, LATITUD_OBJETIVO)
+    # Consulta a Open-Meteo para las próximas 2 horas en tus coordenadas
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={LATITUD}&longitude={LONGITUD}"
+        f"&current=weather_code,precipitation,showers"
+        f"&hourly=weather_code,precipitation_probability,precipitation"
+        f"&forecast_hours=3&timezone=America%2FArgentina%2FBuenos_Aires"
+    )
+
+    try:
+        res = requests.get(url, timeout=15)
+        res.raise_for_status()
+        data = res.json()
+    except Exception as e:
+        print(f"Error al consultar el servicio meteorológico: {e}")
+        return
+
+    current = data.get("current", {})
+    hourly = data.get("hourly", {})
+
+    current_code = current.get("weather_code", 0)
+    hourly_codes = hourly.get("weather_code", [])
+    hourly_times = hourly.get("time", [])
+
     alertas_previas = cargar_alertas_notificadas()
 
-    try:
-        datos = obtener_datos_smn()
-    except Exception as e:
-        print(f"Error al consultar el SMN: {e}")
-        return
+    # Códigos WMO de tormenta con granizo:
+    # 96: Tormenta con granizo leve/moderado
+    # 99: Tormenta severa con granizo fuerte
+    # 95: Tormenta eléctrica fuerte (alerta preventiva)
+    amenaza_granizo = False
+    motivo = ""
+    evento_id = ""
 
-    features = datos.get("features", [])
-    if not features:
-        print("Sin avisos vigentes en el SMN.")
-        return
+    # 1. Chequeo del momento actual
+    if current_code in [96, 99]:
+        amenaza_granizo = True
+        motivo = "Tormenta con caída de granizo en curso o inminente."
+        evento_id = f"now_{current.get('time')}_{current_code}"
+    elif current_code == 95:
+        # Si hay tormenta fuerte, revisamos si la precipitación es violenta
+        if current.get("precipitation", 0) > 10.0:
+            amenaza_granizo = True
+            motivo = "Tormenta eléctrica severa con alta probabilidad de granizo."
+            evento_id = f"storm_{current.get('time')}"
 
-    alertas_encontradas = 0
+    # 2. Chequeo en la ventana de las próximas 1 a 2 horas si no hay evento actual
+    if not amenaza_granizo and hourly_codes:
+        for t, code in zip(hourly_times, hourly_codes):
+            if code in [96, 99]:
+                amenaza_granizo = True
+                hora_formateada = t.split("T")[-1]
+                motivo = f"Pronóstico de tormenta con granizo previsto alrededor de las {hora_formateada} hs."
+                evento_id = f"forecast_{t}_{code}"
+                break
 
-    for item in features:
-        props = item.get("properties", {})
-        geom = item.get("geometry", {})
+    if amenaza_granizo:
+        if evento_id in alertas_previas:
+            print("Alerta ya notificada anteriormente.")
+            return
 
-        alerta_id = str(props.get("id", f"{props.get('date', '')}_{props.get('title', '')}"))
-
-        if alerta_id in alertas_previas:
-            continue
-
-        try:
-            poligono_tormenta = shape(geom)
-        except Exception:
-            continue
-
-        if poligono_tormenta.contains(punto_usuario):
-            alertas_encontradas += 1
-            descripcion = props.get("description", "Aviso meteorológico vigente")
-            validez = props.get("validez", "Próximas horas")
-            tipo_alerta = props.get("title", "Alerta Meteorológica")
-
-            texto_alerta = (
-                "⚠️ *ALERTA METEOROLÓGICA EN TU ZONA*\n\n"
-                f"📌 *Evento:* {tipo_alerta}\n"
-                f"⏳ *Validez:* {validez}\n"
-                f"📝 *Detalle:* {descripcion}\n\n"
-                "🚗 *Revisá si tenés el auto bajo techo.*"
-            )
-
-            enviar_mensaje_telegram(texto_alerta)
-            guardar_alerta_notificada(alerta_id)
-
-    if alertas_encontradas == 0:
-        print("Sin avisos activos para tu ubicación.")
+        mensaje = (
+            "⚠️ *ALERTA METEOROLÓGICA DE GRANIZO*\n\n"
+            f"📌 *Diagnóstico:* {motivo}\n\n"
+            "🚗 *Revisá si el auto está protegido bajo techo.*"
+        )
+        enviar_mensaje_telegram(mensaje)
+        guardar_alerta_notificada(evento_id)
+    else:
+        print(f"Condiciones estables. Código actual: {current_code}. Sin riesgo de granizo inminente.")
 
 
 if __name__ == "__main__":
-    verificar_granizo()
+    verificar_tiempo()
