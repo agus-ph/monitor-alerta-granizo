@@ -13,6 +13,7 @@ UBICACIONES = {
     "CHACARITA": {"lat": -34.5875, "lon": -58.4550},
     "PALERMO": {"lat": -34.5780, "lon": -58.4265},
     "MICROCENTRO": {"lat": -34.6037, "lon": -58.3750},
+    "VILLAGUAY": {"lat": -31.8653, "lon": -59.0270},
 }
 
 HISTORIAL_ALERTAS = "alertas_enviadas.txt"
