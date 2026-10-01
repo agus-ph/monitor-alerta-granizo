@@ -128,7 +128,4 @@ def verificar_tiempo():
 
 
 if __name__ == "__main__":
-    # Línea temporal de prueba:
-    enviar_mensaje_telegram("🧪 *PRUEBA DE ALERTA:* El centinela de granizo está conectado y vigilando CASA, CHACARITA, PALERMO, MICROCENTRO, MORÓN y LELOIR.")
-
     verificar_tiempo()
