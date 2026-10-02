@@ -63,7 +63,7 @@ Para permitir que el workflow registre el historial de alertas despachadas:
 
 ### 3. Disparador Externo (Cron-job.org)
 
-Para asegurar la ejecución puntual cada 5 minutos:
+Para asegurar la ejecución puntual cada 10 minutos:
 * **Método:** `POST`
 * **URL:** `https://api.github.com/repos/<USUARIO>/<REPO>/actions/workflows/monitor.yml/dispatches`
 * **Request Body:** `{"ref": "main"}`
