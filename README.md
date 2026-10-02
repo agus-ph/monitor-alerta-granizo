@@ -27,7 +27,7 @@ Sistema autónomo en la nube para el monitoreo meteorológico hiperlocal y la de
   * CABA: `CHACARITA`, `PALERMO`, `MICROCENTRO`.
   * Entre Ríos: `VILLAGUAY`.
 * **Detección Convectiva de Alta Resolución:** Evaluación de códigos meteorológicos WMO (96 y 99: tormentas con granizo) y tasas de precipitación convectiva a corto plazo (nowcasting).
-* **Precisión de Reloj 24/7:** Disparado externamente cada 5 minutos mediante **Cron-job.org**, evitando las demoras de cola de los crons nativos de GitHub Actions.
+* **Precisión de Reloj 24/7:** Disparado externamente cada 10 minutos mediante **Cron-job.org**, evitando las demoras de cola de los crons nativos de GitHub Actions.
 * **Control de Duplicados (Deduplicación):** Persistencia de identificadores de evento (`alertas_enviadas.txt`) para prevenir spam de notificaciones durante una misma tormenta.
 * **Costo Operativo Cero:** Construido sobre capas gratuitas permanentes (GitHub Actions público, Telegram Bot API, Open-Meteo API y Cron-job.org).
 
