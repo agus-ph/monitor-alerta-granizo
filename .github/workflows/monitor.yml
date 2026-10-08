@@ -34,6 +34,6 @@ jobs:
         run: |
           git config --global user.name "bot-clima"
           git config --global user.email "bot@clima.local"
-          git add alertas_enviadas.txt || true
-          git commit -m "Actualizar alertas procesadas [skip ci]" || true
+          git add registro_alertas.json || true
+          git commit -m "Actualizar cooldown de alertas [skip ci]" || true
           git push || true
