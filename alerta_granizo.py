@@ -1,11 +1,19 @@
 import os
+import json
+import time
 import requests
 
 # Credenciales de Telegram (desde Secrets)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Puntos geográficos a monitorear
+# Tiempo de espera mínimo entre alertas de la misma zona (en segundos)
+# 2 horas = 2 * 60 * 60 = 7200 segundos
+TIEMPO_COOLDOWN_SEGUNDOS = 7200
+
+# Archivo donde guardamos cuándo fue la última alerta por zona
+HISTORIAL_ALERTAS = "registro_alertas.json"
+
 UBICACIONES = {
     "CASA": {"lat": -34.6150, "lon": -58.6350},
     "MORON": {"lat": -34.6534, "lon": -58.6198},
@@ -16,19 +24,25 @@ UBICACIONES = {
     "VILLAGUAY": {"lat": -31.8653, "lon": -59.0270},
 }
 
-HISTORIAL_ALERTAS = "alertas_enviadas.txt"
 
-
-def cargar_alertas_notificadas():
+def cargar_historial():
+    """Carga los timestamps de las últimas alertas enviadas."""
     if not os.path.exists(HISTORIAL_ALERTAS):
-        return set()
-    with open(HISTORIAL_ALERTAS, "r", encoding="utf-8") as f:
-        return set(line.strip() for line in f if line.strip())
+        return {}
+    try:
+        with open(HISTORIAL_ALERTAS, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
-def guardar_alerta_notificada(evento_id):
-    with open(HISTORIAL_ALERTAS, "a", encoding="utf-8") as f:
-        f.write(f"{evento_id}\n")
+def guardar_historial(historial):
+    """Persiste los timestamps actualizados en disco."""
+    try:
+        with open(HISTORIAL_ALERTAS, "w", encoding="utf-8") as f:
+            json.dump(historial, f, indent=2)
+    except Exception as e:
+        print(f"Error guardando historial: {e}")
 
 
 def enviar_mensaje_telegram(mensaje):
@@ -43,11 +57,22 @@ def enviar_mensaje_telegram(mensaje):
         res = requests.post(url, json=payload, timeout=10)
         res.raise_for_status()
         print("-> Alerta despachada a Telegram exitosamente.")
+        return True
     except Exception as e:
         print(f"Error al enviar a Telegram: {e}")
+        return False
 
 
-def evaluar_zona(nombre_zona, coords, alertas_previas):
+def evaluar_zona(nombre_zona, coords, historial):
+    ahora = time.time()
+    ultimo_envio = historial.get(nombre_zona, 0)
+
+    # Si ya se envió una alerta para esta zona hace menos de 2 horas, saltear
+    if ahora - ultimo_envio < TIEMPO_COOLDOWN_SEGUNDOS:
+        minutos_restantes = int((TIEMPO_COOLDOWN_SEGUNDOS - (ahora - ultimo_envio)) / 60)
+        print(f"[{nombre_zona}] En período de espera (silencio activo por {minutos_restantes} min más).")
+        return False
+
     lat = coords["lat"]
     lon = coords["lon"]
 
@@ -65,7 +90,7 @@ def evaluar_zona(nombre_zona, coords, alertas_previas):
         data = res.json()
     except Exception as e:
         print(f"[{nombre_zona}] Error al consultar API: {e}")
-        return
+        return False
 
     current = data.get("current", {})
     hourly = data.get("hourly", {})
@@ -76,20 +101,17 @@ def evaluar_zona(nombre_zona, coords, alertas_previas):
 
     amenaza_granizo = False
     motivo = ""
-    evento_id = ""
 
     # Códigos WMO de tormenta con granizo:
     # 96: Tormenta con granizo leve/moderado
     # 99: Tormenta severa con granizo fuerte
-    # 95: Tormenta eléctrica fuerte
+    # 95: Tormenta eléctrica severa
     if current_code in [96, 99]:
         amenaza_granizo = True
         motivo = "Tormenta con caída de granizo en curso o inminente."
-        evento_id = f"{nombre_zona}_now_{current.get('time')}_{current_code}"
     elif current_code == 95 and current.get("precipitation", 0) > 10.0:
         amenaza_granizo = True
         motivo = "Tormenta eléctrica severa con alta probabilidad de granizo."
-        evento_id = f"{nombre_zona}_storm_{current.get('time')}"
 
     if not amenaza_granizo and hourly_codes:
         for t, code in zip(hourly_times, hourly_codes):
@@ -97,24 +119,22 @@ def evaluar_zona(nombre_zona, coords, alertas_previas):
                 amenaza_granizo = True
                 hora = t.split("T")[-1]
                 motivo = f"Pronóstico de tormenta con granizo estimado a las {hora} hs."
-                evento_id = f"{nombre_zona}_forecast_{t}_{code}"
                 break
 
     if amenaza_granizo:
-        if evento_id in alertas_previas:
-            print(f"[{nombre_zona}] Alerta ({evento_id}) ya notificada.")
-            return
-
         mensaje = (
             f"⚠️ *ALERTA DE GRANIZO: {nombre_zona}*\n\n"
             f"📍 *Zona afectada:* {nombre_zona}\n"
             f"📌 *Diagnóstico:* {motivo}\n\n"
             "🚗 *Revisá si el auto está bajo techo en esa zona.*"
         )
-        enviar_mensaje_telegram(mensaje)
-        guardar_alerta_notificada(evento_id)
+        if enviar_mensaje_telegram(mensaje):
+            historial[nombre_zona] = ahora
+            return True
     else:
         print(f"[{nombre_zona}] Estable (código {current_code}). Sin riesgo.")
+
+    return False
 
 
 def verificar_tiempo():
@@ -122,10 +142,16 @@ def verificar_tiempo():
         print("Error: Variables de entorno ausentes.")
         return
 
-    alertas_previas = cargar_alertas_notificadas()
+    historial = cargar_historial()
+    hubo_cambios = False
 
     for zona, coords in UBICACIONES.items():
-        evaluar_zona(zona, coords, alertas_previas)
+        alerta_enviada = evaluar_zona(zona, coords, historial)
+        if alerta_enviada:
+            hubo_cambios = True
+
+    if hubo_cambios:
+        guardar_historial(historial)
 
 
 if __name__ == "__main__":
